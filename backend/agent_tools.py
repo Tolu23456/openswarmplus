@@ -3,6 +3,8 @@ import subprocess
 import json
 import logging
 import sys
+import urllib.request
+import urllib.parse
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -56,7 +58,6 @@ class AgentTools:
         from backend.agent_orchestrator import AgentOrchestrator
         sub_id = f"{self.orchestrator.session_id}_sub_{len(self.orchestrator.sub_agents)}"
         sub_model = model or self.orchestrator.model
-        logger.info(f"Spawning sub-agent {sub_id} with model {sub_model}")
         sub_orchestrator = AgentOrchestrator(
             session_id=sub_id,
             provider=self.orchestrator.provider,
@@ -92,6 +93,35 @@ class AgentTools:
         }
         return json.dumps(info, indent=2)
 
+    def web_search(self, query: str) -> str:
+        """Simplified web search using DuckDuckGo (no API key needed for basic HTML)."""
+        try:
+            url = f"https://duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                content = response.read().decode('utf-8')
+                # Very basic parsing of result snippets
+                # In a real tool, we'd use a proper parser, but here we use regex for 'built-ins' only
+                import re
+                snippets = re.findall(r'result__snippet.*?>(.*?)</a>', content, re.DOTALL)
+                return "\n\n".join(snippets[:5]) if snippets else "No results found."
+        except Exception as e:
+            return f"Web search failed: {e}"
+
+    def web_fetch(self, url: str) -> str:
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                return response.read().decode('utf-8', errors='ignore')[:10000] # Cap at 10k chars
+        except Exception as e:
+            return f"Web fetch failed: {e}"
+
+    def run_tests(self, test_path: str = ".") -> str:
+        """Run tests using pytest if available, or just look for test files."""
+        return self.run_command(f"python3 -m pytest {test_path}")
+
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         return [
             {"name": "read_file", "description": "Read file content", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
@@ -101,7 +131,10 @@ class AgentTools:
             {"name": "create_sub_agent", "description": "Spawn a sub-agent", "parameters": {"type": "object", "properties": {"prompt": {"type": "string"}, "model": {"type": "string"}}, "required": ["prompt"]}},
             {"name": "git_operation", "description": "Perform Git tasks", "parameters": {"type": "object", "properties": {"operation": {"type": "string", "enum": ["status", "diff", "branch", "log", "add", "commit"]}, "args": {"type": "array", "items": {"type": "string"}}}, "required": ["operation", "args"]}},
             {"name": "recursive_search", "description": "Search files recursively", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"]}},
-            {"name": "get_system_info", "description": "Get host system information", "parameters": {"type": "object", "properties": {}}}
+            {"name": "get_system_info", "description": "Get host system information", "parameters": {"type": "object", "properties": {}}},
+            {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+            {"name": "web_fetch", "description": "Fetch content from a URL", "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+            {"name": "run_tests", "description": "Run project tests", "parameters": {"type": "object", "properties": {"test_path": {"type": "string"}}}}
         ]
 
     async def call_tool(self, name: str, args: Dict[str, Any]) -> str:
@@ -113,4 +146,7 @@ class AgentTools:
         elif name == "git_operation": return self.git_operation(args["operation"], args["args"])
         elif name == "recursive_search": return self.recursive_search(args["pattern"], args.get("path", "."))
         elif name == "get_system_info": return self.get_system_info()
+        elif name == "web_search": return self.web_search(args["query"])
+        elif name == "web_fetch": return self.web_fetch(args["url"])
+        elif name == "run_tests": return self.run_tests(args.get("test_path", "."))
         else: return f"Unknown tool: {name}"
